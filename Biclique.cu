@@ -16,7 +16,7 @@
 #define MAXHSIZE 31000
 #define MAXSSIZE 10000
 
-#define BLOCKNUM 64
+#define BLOCKNUM 128
 #define THREADNUM 32
 
 #define checkCudaErrors(val) check( (val), #val, __FILE__, __LINE__)
@@ -383,6 +383,7 @@ __global__ void findCliqueGPUNew(unsigned* row_dev_L, unsigned* col_dev_L, unsig
 			if (level == *p - 1) {
 				if (threadIdx.x == 0) {
 					//*count += OrderMulDev(S[blockIdx.x][level - 1][0], *q);
+					printf("%d,%d\n", tid, non_vertex[tid]);
 					atomicAdd(count, OrderMulDev(S[blockIdx.x][level][0], *q));
 					//printf("%d ", *count);
 					stack[blockIdx.x][top] = 0;
@@ -470,8 +471,8 @@ __global__ void findCliqueGPUNew(unsigned* row_dev_L, unsigned* col_dev_L, unsig
 }
 
 __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, unsigned* row_dev_H, unsigned* col_dev_H, int* count, int* p, int* q, int* Hsize, unsigned* non_vertex) {
-	__shared__ int top, level, H_neighbor_size, L_neighbor_size, tid, flag, res_num, lock, subH_size, S_level_size;
-	__shared__ unsigned vertex, num_tmp, visited_root, visited_second, min, mask;
+	__shared__ int top, level, H_neighbor_size, L_neighbor_size, tid, flag, res_num, lock, subH_size, S_level_size, threshold;
+	__shared__ unsigned vertex, num_tmp, visited_root, visited_second, min, mask, gcl_tmp, loop_id, loop_end;
 	//__shared__ double duration;
 	tid = blockIdx.x;
 	int B_size = 0, B_size_H = 0;
@@ -485,13 +486,16 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 	while (tid < *Hsize) {
 
 		//unsigned S_level_size = 0;
-		if ((visited_root != 0 && non_vertex[tid] <= visited_root) || (BNR[blockIdx.x] > 0 && tid < BNR[blockIdx.x])) {
+		if ((visited_root != 0 && tid <= visited_root) || (BNR[blockIdx.x] > 0 && tid < BNR[blockIdx.x])) {
 			tid += gridDim.x;
 			continue;
 		}
 		if (threadIdx.x == 0) {
 			//clock_t start, end;
 			//start = clock();
+			/*if (tid == 160) {
+				printf("A\n");
+			}*/
 			printf("%d:%d\n", blockIdx.x, tid);
 			subH_size = 0, L_neighbor_size = 0, B_size = 0, H_neighbor_size = 0, B_size_H = 0, flag = 0, level = 0, top = -1, S_level_size = 0, num_tmp = 0;
 			stack[blockIdx.x][++top] = 0;
@@ -524,6 +528,7 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 			if (level == *p - 1) {
 				if (threadIdx.x == 0) {
 					//*count += OrderMulDev(S[blockIdx.x][level - 1][0], *q);
+					//printf("%d,%d\n", tid, non_vertex[tid]);
 					atomicAdd(count, OrderMulDev(S[blockIdx.x][level][0], *q));
 					//printf("%d ", *count);
 					stack[blockIdx.x][top] = 0;
@@ -546,13 +551,15 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 			for (int j = stack[blockIdx.x][top]; j < size; j++) {
 				if (threadIdx.x == 0) {
 					vertex = subH[blockIdx.x][level][j + 1] - 1;
+					loop_id = BNN[blockIdx.x][0];
 				}
-				if ((top == 0 && visited_second != 0 && vertex <= visited_second) || (top == 0 && BNN[blockIdx.x][0]!= 0 && vertex <= BNN[blockIdx.x][0])) {
+				if (top == 0 && loop_id!= 0 && j <= loop_id) {
 					if (threadIdx.x == 0) {
-						stack[blockIdx.x][top] = BNN[blockIdx.x][0] + 1;
-						printf("%d Skip %d\n", blockIdx.x, BNN[blockIdx.x][0]);
-						visited_second = 0;
+						//stack[blockIdx.x][top] = BNN[blockIdx.x][0] + 1;
+						printf("%d Skip %d-%d\n", blockIdx.x, j, BNN[blockIdx.x][0]);
+						//visited_second = 0;
 					}
+					j = loop_id;
 					continue;
 				}
 				if (threadIdx.x == 0) {
@@ -639,14 +646,16 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 	/*if (blockIdx.x == 23) {
 		printf("A");
 	}*/
-	unsigned next_vertex, idx; // mask denote it belongs to which label
+	unsigned next_vertex, idx, next_idx, current_root; // mask denote it belongs to which label
 	while (true) {
 		if (threadIdx.x == 0) {
+			//loop_end = 1;
 			min = 0xFFFFFFFF, idx = -1, mask = 0;
 			//while (atomicExch(&glock, 0) == 0);
 			for (int i = 0; i < gridDim.x; i++) {
 				if (i == blockIdx.x) continue;
-				if ((GCL[i] & 0x20000000) != 0x20000000 && GCL[i] >> 30 == 0) {
+				//if (GCL[i] != 0xFFFFFFFF) loop_end = 0;
+				if ( GCL[i] >> 30 == 0 ) {
 					unsigned tmp = (GCL[i] << 3) >> 3;
 					if (min > tmp) {
 						min = tmp;
@@ -654,6 +663,7 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 					}
 				}
 			}
+			//printf("%d\n", idx);
 			//glock = 1;
 		}
 		__syncthreads();
@@ -663,19 +673,46 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 			}
 			break;
 		}
+		//loop_end_reg = loop_end;
+		/*if (loop_end == 1) {
+			if (threadIdx.x == 0) {
+				GCL[blockIdx.x] = 0xFFFFFFFF;
+			}
+			break;
+		}*/
 		__syncthreads();
+		/*if (GCL[idx] = 0xFFFFFFFF) {
+			continue;
+		}*/
+		if (threadIdx.x == 0) {
+			//printf("%d, %d, %u\n", idx, GCL[idx], blockIdx.x);
+			gcl_tmp = GCL[idx];
+		}
+		if (gcl_tmp == 0xFFFFFFFF) {
+			continue;
+		}
 		if(threadIdx.x == 0){
 			//printf("%d: %d\n", blockIdx.x, min);
 			//steal root
-			unsigned current_root = (min - min % (*p)) / (*p) * gridDim.x + idx;
+			current_root = (GCL[idx] >> 30 == 1 ? (GCL[idx] << 3) >> 3 : (min - min % (*p)) / (*p) * gridDim.x + idx);
 			if (GCL[idx] >> 30 != 1 && current_root + gridDim.x < *Hsize && BNR[idx] < *Hsize) {
+				/*if (current_root > 38) {
+					printf("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHH\n");
+				}*/
+				printf("%u CurrentRoot\n", GCL[idx]);
 				mask = 0x40000000;
-				int next_idx = (current_root + gridDim.x) > BNR[idx] ? (current_root + gridDim.x) : BNR[idx];
+				next_idx = (current_root + gridDim.x) > BNR[idx] ? (current_root + gridDim.x) : BNR[idx];
 				next_vertex = non_vertex[next_idx];
-				GCL[idx] = next_vertex | 0x60000000; // the 30th bit denotes that the next root is stolen
-				GCL[blockIdx.x] = 0x40000000;
+				GCL[idx] = next_idx | 0x40000000; // the 30th bit denotes that the next root is stolen
+				GCL[blockIdx.x] = next_idx | 0x40000000;
 				BNR[idx] = next_idx + gridDim.x;
-				printf("%d Steal %d:%d\n", blockIdx.x, idx, next_idx);
+				printf("%d Steal %d:%d, %d %u %d CurrentRoot\n", blockIdx.x, idx, next_idx, current_root, min, *p);
+				/*if (current_root > 38) {
+					printf("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHH\n");
+				}*/
+				/*if (next_idx == 160) {
+					printf("A\n");
+				}*/
 				//# begin initializing
 				subH_size = 0, L_neighbor_size = 0, B_size = 0, H_neighbor_size = 0, B_size_H = 0, flag = 0, level = 0, top = -1, S_level_size = 0, num_tmp = 0;
 				stack[blockIdx.x][++top] = 0;
@@ -690,34 +727,49 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				for (int i = 0; i < S_level_size; i++) {
 					S[blockIdx.x][0][i + 1] = col_dev_L[row_dev_L[next_vertex] + i];
 				}
+				threshold = -1;
 				//#end initializing
 			}
 
 			//steal second level node
-			/*else if (row_dev_H[current_root + 1] - row_dev_H[current_root] > stack[idx][1] && row_dev_H[current_root + 1] - row_dev_H[current_root] > BNN[idx][0] + 1) {
+			else if (row_dev_H[non_vertex[current_root] + 1] - row_dev_H[non_vertex[current_root]] > stack[idx][0] && row_dev_H[non_vertex[current_root] + 1] - row_dev_H[non_vertex[current_root]] > BNN[idx][0] + 1) {
 				mask = 0x80000000;
-				int next_id = stack[idx][1] > BNN[idx][0] ? stack[idx][1] : BNN[idx][0] + 1;
-				next_vertex = col_dev_H[row_dev_H[current_root] + next_id];
-				GCL[idx] = next_vertex | 0xA0000000; // the 30th bit denotes the next sibling is stloen
+				unsigned current_root_label = non_vertex[current_root];
+				// 该加一把锁，以避免不同block同时读取BNN
+				while (atomicExch(&glock, 0) == 0);
+				int next_id = stack[idx][0] > BNN[idx][0] ? stack[idx][0] : BNN[idx][0] + 1;
+				//printf("%d: %u, %d, %d\n", blockIdx.x, GCL[idx], stack[idx][0], BNN[idx][0]);
+				BNN[idx][0] = next_id;
+				glock = 1;
+				next_vertex = col_dev_H[row_dev_H[current_root_label] + next_id] - 1;
+				if (GCL[idx] >> 30 == 1) {
+					printf("%d steal %d's %d second: %d, %u Steal Steal\n", blockIdx.x, idx, current_root, next_vertex, next_id);
+				}
+				else
+					printf("%d steal %d's %d second: %d, %u\n", blockIdx.x, idx, current_root, next_vertex, next_id);
+				/*if (blockIdx.x == 3 && idx == 0 && next_vertex == 87) {
+					printf("H");
+				}*/
+				GCL[idx] = next_vertex | 0x80000000; // the 30th bit denotes the next sibling is stloen
 				GCL[blockIdx.x] = 0x80000000;
-				BNN[idx][0] = next_vertex;
-				printf("%d steal %d's %d second: %d\n", blockIdx.x, idx, current_root, next_vertex);
+				//BNN[idx][0] = next_vertex;
 				//# begin initializing
 				subH_size = 0, L_neighbor_size = 0, B_size = 0, H_neighbor_size = 0, B_size_H = 0, flag = 0, level = 0, top = -1, S_level_size = 0, num_tmp = 0;
 				stack[blockIdx.x][++top] = 0;
 
-				subH_size = row_dev_H[current_root + 1] - row_dev_H[current_root];
+				subH_size = row_dev_H[current_root_label + 1] - row_dev_H[current_root_label];
 				subH[blockIdx.x][0][0] = subH_size;
 				for (int i = 0; i < subH_size; i++) {
-					subH[blockIdx.x][0][i + 1] = col_dev_H[row_dev_H[current_root] + i];
+					subH[blockIdx.x][0][i + 1] = col_dev_H[row_dev_H[current_root_label] + i];
 				}
-				S_level_size = row_dev_L[current_root + 1] - row_dev_L[current_root];
+				S_level_size = row_dev_L[current_root_label + 1] - row_dev_L[current_root_label];
 				S[blockIdx.x][0][0] = S_level_size;
 				for (int i = 0; i < S_level_size; i++) {
-					S[blockIdx.x][0][i + 1] = col_dev_L[row_dev_L[current_root] + i];
+					S[blockIdx.x][0][i + 1] = col_dev_L[row_dev_L[current_root_label] + i];
 				}
+				threshold = 0;
 				//#end initializing
-			}*/
+			}
 			//steal the lower level node except root and second level node
 			/*else {
 				int lev_tmp = 2, lev_cur = min % gridDim.x;
@@ -746,13 +798,29 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				// warning: 要不要把该GCL标记一下，下次不再遍历它
 			}*/
 		}
+		//__syncthreads();
 		__syncthreads();
+		if (threadIdx.x == 0) {
+			//printf("%d, %d, %u\n", idx, GCL[idx], blockIdx.x);
+			gcl_tmp = GCL[idx];
+		}
+		if (gcl_tmp == 0xFFFFFFFF) {
+			continue;
+		}
 		// process the sibling case singlely
 		if (mask == 0x80000000 || mask == 0xC0000000) {
+			//用于跳过已结束的second level node
+			/*if (threadIdx.x == 0) {
+				//printf("%d, %d, %u\n", idx, GCL[idx], blockIdx.x);
+				gcl_tmp = GCL[idx];
+			}
+			if (gcl_tmp == 0xFFFFFFFF) {
+				continue;
+			}*/
 			if (threadIdx.x == 0) {
 				vertex = next_vertex;
 				flag = 1;
-				stack[blockIdx.x][top] = 0;
+				stack[blockIdx.x][top] = 1;
 				top++;
 				level++;
 				//GCL[blockIdx.x] = (tid / gridDim.x * (*p) + level) | mask;
@@ -780,7 +848,8 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				subH[blockIdx.x][level - 1][1] = vertex;
 				subH[blockIdx.x][level][0] = res_num;
 				if (S[blockIdx.x][level][0] < *q || subH[blockIdx.x][level][0] < *p - level - 1) {
-					top = -1;
+					top--;
+					level--;
 				}
 			}
 			__syncthreads();
@@ -791,18 +860,25 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 		}
 
 		__syncthreads();
-		while (top != -1) {
+		while (top != threshold) {
 			__syncthreads();
+			/*if (threadIdx.x == 0) {
+				if (next_idx == 160 && mask == 0x40000000) {
+					printf("%d, ", level);
+				}
+			}*/
 			//unsigned vertex = stack[top];
 			if (level == *p - 1) {
 				if (threadIdx.x == 0) {
 					//*count += OrderMulDev(S[blockIdx.x][level - 1][0], *q);
+					/*if (mask == 0x80000000) printf("%d-Steal\n", current_root);
+					else printf("%d-Steal-root\n", next_idx);*/
 					atomicAdd(count, OrderMulDev(S[blockIdx.x][level][0], *q));
 					//printf("%d ", *count);
 					stack[blockIdx.x][top] = 0;
 					top--;
 					level--;
-					GCL[blockIdx.x] = (tid / gridDim.x * (*p) + level) | mask;
+					GCL[blockIdx.x] = (mask == 0x40000000 ? next_idx | 0x40000000 : (tid / gridDim.x * (*p) + level) | mask);
 				}
 			}
 
@@ -816,11 +892,23 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 			for (int j = stack[blockIdx.x][top]; j < size; j++) {
 				if (threadIdx.x == 0) {
 					vertex = subH[blockIdx.x][level][j + 1] - 1;
+					/*loop_id = BNN[blockIdx.x][0];
+				}
+				if (mask == 0x40000000 && top == 0 && loop_id != 0 && j <= loop_id) {
+					if (threadIdx.x == 0) {
+						//stack[blockIdx.x][top] = BNN[blockIdx.x][0] + 1;
+						printf("Steal root %d Skip %d-%d\n", blockIdx.x, j, BNN[blockIdx.x][0]);
+						//visited_second = 0;
+					}
+					j = loop_id;
+					continue;
+				}
+				if(threadIdx.x == 0){*/
 					flag = 1;
 					stack[blockIdx.x][top] = j + 1;
 					top++;
 					level++;
-					GCL[blockIdx.x] = (tid / gridDim.x * (*p) + level) | mask;
+					GCL[blockIdx.x] = (mask == 0x40000000 ? next_idx | 0x40000000 : (tid / gridDim.x * (*p) + level) | mask);
 					L_neighbor_size = row_dev_L[vertex + 1] - row_dev_L[vertex];
 					res_num = 0;
 					lock = 1;
@@ -857,7 +945,7 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 						stack[blockIdx.x][top] = 0;
 						top--;
 						level--;
-						GCL[blockIdx.x] = (tid / gridDim.x * (*p) + level) | mask;
+						GCL[blockIdx.x] = (mask == 0x40000000 ? next_idx | 0x40000000 : (tid / gridDim.x * (*p) + level) | mask);
 					}
 				}
 				__syncthreads();
@@ -868,8 +956,8 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				if (threadIdx.x == 0) {
 					stack[blockIdx.x][top] = 0;
 					top--;
-					level = level == 0 ? 0 : level - 1;
-					GCL[blockIdx.x] = (tid / gridDim.x * (*p) + level) | mask;
+					level--;
+					GCL[blockIdx.x] = (mask == 0x40000000 ? next_idx | 0x40000000 : (tid / gridDim.x * (*p) + level) | mask);
 				}
 			}
 			__syncthreads();
@@ -1304,8 +1392,8 @@ void calWorkDFS(Graph& H, Graph& L, std::vector<unsigned long long>& workload, i
 }
 
 int main() {
-	//test(4, 4);
-	int p_list[] = { 22 };
+	//test(21, 8);
+	int p_list[] = { 18 };
 	int q_list[] = { 8 };
 	int p, q;
 
@@ -1370,7 +1458,7 @@ int main() {
 					nonzerovertex.push_back(i);
 				}
 			}
-
+			//nonzerovertex.erase(nonzerovertex.begin()+121);
 			/*for (auto x : graphH.vertices[nonzerovertex[0]].neighbor) {
 				std::cout << x << ",";
 			}*/
@@ -1551,6 +1639,6 @@ int main() {
 }
 
 //int main() {
-//	test(12, 8);
+//	test(20, 8);
 //	return 0;
 //}
