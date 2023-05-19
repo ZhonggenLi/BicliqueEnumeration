@@ -6,6 +6,7 @@
 #include<algorithm>
 #include<chrono>
 #include<time.h>
+#include<Windows.h>
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
@@ -15,8 +16,9 @@
 //#define MAXVERTEXSIZE 31000
 #define MAXHSIZE 31000
 #define MAXSSIZE 10000
+#define MAXSTEALLEVEL 2
 
-#define BLOCKNUM 128
+#define BLOCKNUM 32
 #define THREADNUM 32
 
 #define checkCudaErrors(val) check( (val), #val, __FILE__, __LINE__)
@@ -291,24 +293,32 @@ __device__ unsigned BNR[BLOCKNUM] = { 0 };
 __device__ unsigned BNN[BLOCKNUM][MAXSTACKSIZE] = { 0 };
 __device__ int glock = 1;
 
+//__device__ unsigned Time[BLOCKNUM] = { 0 };
+
 //__device__ unsigned intersect_tmplist[BLOCKNUM][MAXSSIZE] = { 0 };
 //__device__ unsigned subHtmp[BLOCKNUM][MAXHSIZE] = { 0 };
 
 __device__ void IntersectionDev(unsigned vertex, unsigned* col_dev_L, int L_neighbor_size, unsigned* B, int B_size, unsigned* Res, int& res_num, int& lock) {
 	int tid_t = threadIdx.x;
 	//printf("%d ", tid);
+	//unsigned long long start, end, start2, end2;
 	while (tid_t < B_size) {
 		unsigned val = B[tid_t];
 		//binary search
 		int ret = 0, tmp = L_neighbor_size;
 		while (tmp > 1) {
 			int halfsize = tmp / 2;
+			//start = clock64() / 1582000;
 			int cand = col_dev_L[vertex + ret + halfsize];
+			//end = clock64() / 1582000;
+			//duration1 += (end - start);
 			ret += (cand < val) ? halfsize : 0;
 			tmp -= halfsize;
 		}
 		ret += (col_dev_L[vertex + ret] < val);
 		//__syncthreads();
+
+		//start2 = clock64() / 1582000;
 		if (ret <= (L_neighbor_size - 1) && col_dev_L[vertex + ret] == val)
 		{
 			//__syncthreads();
@@ -333,6 +343,8 @@ __device__ void IntersectionDev(unsigned vertex, unsigned* col_dev_L, int L_neig
 		//Res[tid_t] = (ret <= (L_neighbor_size - 1) ? (col_dev_L[vertex + ret] == val) ? val : 0 : 0);
 		//__syncthreads();
 		tid_t += blockDim.x;
+		//end2 = clock64() / 1582000;
+		//duration2 += (end2 - start2);
 	}
 }
 
@@ -473,14 +485,24 @@ __global__ void findCliqueGPUNew(unsigned* row_dev_L, unsigned* col_dev_L, unsig
 __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, unsigned* row_dev_H, unsigned* col_dev_H, int* count, int* p, int* q, int* Hsize, unsigned* non_vertex) {
 	__shared__ int top, level, H_neighbor_size, L_neighbor_size, tid, flag, res_num, lock, subH_size, S_level_size, threshold;
 	__shared__ unsigned vertex, num_tmp, visited_root, visited_second, min, mask, gcl_tmp, loop_id, loop_end;
+	//__shared__ clock_t start, end;
 	//__shared__ double duration;
+	//SYSTEMTIME start, end;
 	tid = blockIdx.x;
+	//cudaEvent_t start, stop;
+	//cudaEventCreate(&start);
+	//cudaEventRecord(start_cu_dev[blockIdx.x], 0);
 	int B_size = 0, B_size_H = 0;
+	//unsigned long long start, end, start1, end1, duration = 0, start2, end2, duration2 = 0, duration3 = 0;
 	if (threadIdx.x == 0) {
 		visited_root = 0;
 		visited_second = 0;
+		//GetLocalTime(&start);
+		//auto begin = std::chrono::high_resolution_clock::now();
+		//time_t tim;
+		//time(&tim);
+		//start1 = clock64() / 1582000;
 	}
-	//clock_t start, end;
 	//start = clock();
 	__syncthreads();
 	while (tid < *Hsize) {
@@ -492,11 +514,11 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 		}
 		if (threadIdx.x == 0) {
 			//clock_t start, end;
-			//start = clock();
 			/*if (tid == 160) {
 				printf("A\n");
 			}*/
-			printf("%d:%d\n", blockIdx.x, tid);
+			//printf("%d:%d\n", blockIdx.x, tid);
+			//start2 = clock64() / 1582000;
 			subH_size = 0, L_neighbor_size = 0, B_size = 0, H_neighbor_size = 0, B_size_H = 0, flag = 0, level = 0, top = -1, S_level_size = 0, num_tmp = 0;
 			stack[blockIdx.x][++top] = 0;
 
@@ -517,6 +539,11 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 		for (int i = threadIdx.x; i < S_level_size; i += blockDim.x) {
 			S[blockIdx.x][0][i + 1] = col_dev_L[row_dev_L[non_vertex[tid]] + i];
 		}
+
+		/*if (threadIdx.x == 0) {
+			end2 = clock64() / 1582000;
+			duration2 += end2 - start2;
+		}*/
 		//end = clock();
 		//duration += (((double)end - start) / CLOCKS_PER_SEC);
 		//printf("%d, %lf\n", tid, duration);
@@ -529,7 +556,10 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				if (threadIdx.x == 0) {
 					//*count += OrderMulDev(S[blockIdx.x][level - 1][0], *q);
 					//printf("%d,%d\n", tid, non_vertex[tid]);
+					//start2 = clock64() / 1582000;
 					atomicAdd(count, OrderMulDev(S[blockIdx.x][level][0], *q));
+					//end2 = clock64() / 1582000;
+					//duration2 += end2 - start2;
 					//printf("%d ", *count);
 					stack[blockIdx.x][top] = 0;
 					top--;
@@ -551,15 +581,19 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 			for (int j = stack[blockIdx.x][top]; j < size; j++) {
 				if (threadIdx.x == 0) {
 					vertex = subH[blockIdx.x][level][j + 1] - 1;
-					loop_id = BNN[blockIdx.x][0];
+					loop_id = BNN[blockIdx.x][top];
+					if (j == size - 1) BNN[blockIdx.x][top] = 0;
 				}
-				if (top == 0 && loop_id!= 0 && j <= loop_id) {
+				if (loop_id!= 0 && j <= loop_id - 1) {
 					if (threadIdx.x == 0) {
 						//stack[blockIdx.x][top] = BNN[blockIdx.x][0] + 1;
-						printf("%d Skip %d-%d\n", blockIdx.x, j, BNN[blockIdx.x][0]);
+						//printf("%d Skip %d-%d, Level %d\n", blockIdx.x, j, loop_id - 1, top);
+						if (loop_id == size)  BNN[blockIdx.x][top] = 0;
+						//BNN[blockIdx.x][top] = 0;
 						//visited_second = 0;
+						stack[blockIdx.x][top] = loop_id;
 					}
-					j = loop_id;
+					j = loop_id - 1;
 					continue;
 				}
 				if (threadIdx.x == 0) {
@@ -570,12 +604,17 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 					//next root has been stolen
 					if (GCL[blockIdx.x] >> 30 == 1) visited_root = (GCL[blockIdx.x] << 3) >> 3;
 					else if (GCL[blockIdx.x] >> 30 == 2) visited_second = (GCL[blockIdx.x] << 3) >> 3;
+					
+					//start2 = clock64() / 1582000;
 					GCL[blockIdx.x] = tid / gridDim.x * (*p) + level;
 					L_neighbor_size = row_dev_L[vertex + 1] - row_dev_L[vertex];
 					res_num = 0;
 					lock = 1;
+					//end2 = clock64() / 1582000;
+					//duration2 += end2 - start2;
 					//start = clock();
 					num_tmp += S[blockIdx.x][level - 1][0];
+					//start = clock64()/ 1582000;
 				}
 				//__syncthreads();
 				__syncthreads();
@@ -583,8 +622,10 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				__syncthreads();
 				//checkCudaErrors(cudaGetLastError());
 				if (threadIdx.x == 0) {
-					//end = clock();
-					//duration = ((double)(end - start) / CLOCKS_PER_SEC);
+					//end = clock64() / 1582000;
+					//duration += end - start;
+
+					//start2 = clock64() / 1582000;
 					//printf("%lf\n", duration);
 					//intersect_num = 0;
 					//__syncthreads();
@@ -594,6 +635,10 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 					res_num = 0;
 					lock = 1;
 					num_tmp += subH[blockIdx.x][level - 1][0];
+					
+					//end2 = clock64() / 1582000;
+					//duration2 += end2 - start2;
+					//start = clock64() / 1582000;
 				}
 				__syncthreads();
 				IntersectionDev(row_dev_H[vertex], col_dev_H, H_neighbor_size, &subH[blockIdx.x][level - 1][1], subH[blockIdx.x][level - 1][0], &subH[blockIdx.x][level][0], res_num, lock);
@@ -601,6 +646,8 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 
 				//checkCudaErrors(cudaGetLastError());
 				if (threadIdx.x == 0) {
+					//end = clock64() / 1582000;
+					//duration += end - start;
 					//__syncthreads();
 					subH[blockIdx.x][level][0] = res_num;
 					if (S[blockIdx.x][level][0] < *q || subH[blockIdx.x][level][0] < *p - level - 1) {
@@ -632,6 +679,7 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 		}
 		if (threadIdx.x == 0) {
 			tid += gridDim.x;
+			//BNR[blockIdx.x] = 0;
 			//printf("H:%u\n", num_tmp);
 		}
 
@@ -642,28 +690,39 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 	/*if (threadIdx.x == 0) {
 		printf("%d:%lf\n", blockIdx.x, ((double)(end-start)));
 	}*/
-	if(threadIdx.x==0) printf("Begin tid:%d, blockId:%d\n", tid,blockIdx.x);
+	//if(threadIdx.x==0) printf("Begin tid:%d, blockId:%d\n", tid,blockIdx.x);
 	/*if (blockIdx.x == 23) {
 		printf("A");
 	}*/
-	unsigned next_vertex, idx, next_idx, current_root; // mask denote it belongs to which label
+	unsigned next_vertex, idx, next_idx, current_root, last_idx; // mask denote it belongs to which label
+	if (threadIdx.x == 0) last_idx = blockIdx.x;
 	while (true) {
 		if (threadIdx.x == 0) {
+			//printf("Looping %d\n", blockIdx.x);
 			//loop_end = 1;
+			
+			/*printf("BlockIdx %d: ", blockIdx.x);
+			for (int i = 0; i < 32; i++) {
+				printf("%u, ", GCL[i]);
+			}
+			printf("\n");*/
+			//start2 = clock64() / 1582000;
 			min = 0xFFFFFFFF, idx = -1, mask = 0;
 			//while (atomicExch(&glock, 0) == 0);
 			for (int i = 0; i < gridDim.x; i++) {
-				if (i == blockIdx.x) continue;
+				if (i == blockIdx.x || GCL[i] >> 28 == 10) continue;
 				//if (GCL[i] != 0xFFFFFFFF) loop_end = 0;
-				if ( GCL[i] >> 30 == 0 ) {
+				if ( GCL[i] >> 30 <= 2 && i != last_idx) {
 					unsigned tmp = (GCL[i] << 3) >> 3;
-					if (min > tmp) {
+					if (tmp > 0 && min > tmp) {
 						min = tmp;
 						idx = i;
 					}
 				}
 			}
-			//printf("%d\n", idx);
+			//end2 = clock64() / 1582000;
+			//duration2 += end2 - start2;
+			//printf("H %d,%d,%d,%u\n", min,blockIdx.x,idx,GCL[idx]);
 			//glock = 1;
 		}
 		__syncthreads();
@@ -689,24 +748,26 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 			gcl_tmp = GCL[idx];
 		}
 		if (gcl_tmp == 0xFFFFFFFF) {
+			if (threadIdx.x == 0)  last_idx = blockIdx.x;
 			continue;
 		}
 		if(threadIdx.x == 0){
 			//printf("%d: %d\n", blockIdx.x, min);
 			//steal root
 			current_root = (GCL[idx] >> 30 == 1 ? (GCL[idx] << 3) >> 3 : (min - min % (*p)) / (*p) * gridDim.x + idx);
-			if (GCL[idx] >> 30 != 1 && current_root + gridDim.x < *Hsize && BNR[idx] < *Hsize) {
+			if (GCL[idx] >> 30 == 0 && current_root + gridDim.x < *Hsize && BNR[idx] < *Hsize) {
 				/*if (current_root > 38) {
 					printf("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHH\n");
 				}*/
-				printf("%u CurrentRoot\n", GCL[idx]);
+				//printf("%u CurrentRoot\n", GCL[idx]);
+				//start2 = clock64() / 1582000;
 				mask = 0x40000000;
 				next_idx = (current_root + gridDim.x) > BNR[idx] ? (current_root + gridDim.x) : BNR[idx];
 				next_vertex = non_vertex[next_idx];
 				GCL[idx] = next_idx | 0x40000000; // the 30th bit denotes that the next root is stolen
 				GCL[blockIdx.x] = next_idx | 0x40000000;
 				BNR[idx] = next_idx + gridDim.x;
-				printf("%d Steal %d:%d, %d %u %d CurrentRoot\n", blockIdx.x, idx, next_idx, current_root, min, *p);
+				//printf("%d Steal %d:%d, %d %u %d CurrentRoot\n", blockIdx.x, idx, next_idx, current_root, min, *p);
 				/*if (current_root > 38) {
 					printf("HHHHHHHHHHHHHHHHHHHHHHHHHHHHHH\n");
 				}*/
@@ -729,29 +790,30 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				}
 				threshold = -1;
 				//#end initializing
+				//end2 = clock64() / 1582000;
+				//duration2 += end2 - start2;
 			}
 
 			//steal second level node
-			else if (row_dev_H[non_vertex[current_root] + 1] - row_dev_H[non_vertex[current_root]] > stack[idx][0] && row_dev_H[non_vertex[current_root] + 1] - row_dev_H[non_vertex[current_root]] > BNN[idx][0] + 1) {
+			else if (GCL[idx] >> 30 != 2 && row_dev_H[non_vertex[current_root] + 1] - row_dev_H[non_vertex[current_root]] > stack[idx][0] && row_dev_H[non_vertex[current_root] + 1] - row_dev_H[non_vertex[current_root]] > BNN[idx][0] + 1) {
+				//start2 = clock64() / 1582000;
 				mask = 0x80000000;
 				unsigned current_root_label = non_vertex[current_root];
 				// 该加一把锁，以避免不同block同时读取BNN
 				while (atomicExch(&glock, 0) == 0);
-				int next_id = stack[idx][0] > BNN[idx][0] ? stack[idx][0] : BNN[idx][0] + 1;
+				int next_id = stack[idx][0] > BNN[idx][0] ? stack[idx][0] : BNN[idx][0];
 				//printf("%d: %u, %d, %d\n", blockIdx.x, GCL[idx], stack[idx][0], BNN[idx][0]);
-				BNN[idx][0] = next_id;
+				BNN[idx][0] = next_id + 1;
 				glock = 1;
 				next_vertex = col_dev_H[row_dev_H[current_root_label] + next_id] - 1;
-				if (GCL[idx] >> 30 == 1) {
+				/*if (GCL[idx] >> 30 == 1) {
 					printf("%d steal %d's %d second: %d, %u Steal Steal\n", blockIdx.x, idx, current_root, next_vertex, next_id);
 				}
 				else
-					printf("%d steal %d's %d second: %d, %u\n", blockIdx.x, idx, current_root, next_vertex, next_id);
-				/*if (blockIdx.x == 3 && idx == 0 && next_vertex == 87) {
-					printf("H");
-				}*/
-				GCL[idx] = next_vertex | 0x80000000; // the 30th bit denotes the next sibling is stloen
-				GCL[blockIdx.x] = 0x80000000;
+					printf("%d steal %d's %d second: %d, %u\n", blockIdx.x, idx, current_root, next_vertex, next_id);*/
+				
+				GCL[idx] = next_vertex | 0xC0000000; // the 30th bit denotes the next sibling is stloen
+				GCL[blockIdx.x] = next_id | 0xA0000000;
 				//BNN[idx][0] = next_vertex;
 				//# begin initializing
 				subH_size = 0, L_neighbor_size = 0, B_size = 0, H_neighbor_size = 0, B_size_H = 0, flag = 0, level = 0, top = -1, S_level_size = 0, num_tmp = 0;
@@ -769,34 +831,64 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				}
 				threshold = 0;
 				//#end initializing
+				//end2 = clock64() / 1582000;
+				//duration2 += end2 - start2;
 			}
 			//steal the lower level node except root and second level node
-			/*else {
-				int lev_tmp = 2, lev_cur = min % gridDim.x;
-				for (lev_tmp = 2; lev_tmp < lev_cur; lev_tmp++) {
-					if (stack[idx][lev_tmp] <= subH[idx][lev_tmp][0]) break;
+			else if(min % *p > 1 && GCL[idx] >> 28 != 10){
+				//min &= 0x0FFFFFFF;
+				//start2 = clock64() / 1582000;
+				/*if (GCL[idx] >> 30 == 2) {
+					printf("A %d %u %u %d %d %d %d %d\n",min % *p, min, GCL[idx], idx, stack[idx][1], BNN[idx][1], subH[idx][1][0], blockIdx.x);
+				}*/
+				int lev_tmp = 1, lev_cur = min % *p > MAXSTEALLEVEL ? MAXSTEALLEVEL : min % *p;
+				for (lev_tmp = 1; lev_tmp < lev_cur; lev_tmp++) {
+					if (stack[idx][lev_tmp] < subH[idx][lev_tmp][0] && BNN[idx][lev_tmp] < subH[idx][lev_tmp][0]) {
+						//printf("%d, %d\n", blockIdx.x, stack[idx][lev_tmp],BNN[idx][lev_tmp]);
+						break;
+					}
 				}
 				// find a next vertex that is uncle or sibling
 				if (lev_tmp < lev_cur) {
 					mask = 0xC0000000;
-					next_vertex = subH[idx][lev_tmp][stack[idx][lev_tmp]];
-					GCL[idx] = next_vertex | 0xE0000000; // the 30th bit denotes the next sibling is stloen
-					GCL[blockIdx.x] = 0xC0000000;
-					printf("%d steal uncle %d:%d\n", blockIdx.x, idx, current_root);
-					//# begin initializing
-					subH_size = 0, L_neighbor_size = 0, B_size = 0, H_neighbor_size = 0, B_size_H = 0, flag = 0, level = lev_tmp - 1, top = lev_tmp - 1, S_level_size = 0, num_tmp = 0;
-					for (int i = 0; i <= top; i++) {
-						stack[blockIdx.x][i] = 0;
-						subH[blockIdx.x][i][0] = 1;
+					while (atomicExch(&glock, 0) == 0);
+					int next_id = stack[idx][lev_tmp] > BNN[idx][lev_tmp] ? stack[idx][lev_tmp] : BNN[idx][lev_tmp];
+					if (next_id < subH[idx][lev_tmp][0]) {
+						BNN[idx][lev_tmp] = next_id + 1;
+						next_vertex = subH[idx][lev_tmp][next_id + 1] - 1;
+						glock = 1;
+						//printf("Other Level %d: %d steal %d's %d node: %d, %d Father: %d, all %d\n", lev_tmp, blockIdx.x, idx, current_root, next_id, next_vertex, stack[idx][lev_tmp - 1] - 1, subH[idx][lev_tmp][0]);
+						GCL[idx] = next_vertex | 0xC0000000; // the 30th bit denotes the next sibling is stloen
+						GCL[blockIdx.x] = next_id | 0xC0000000;
+						//printf("%d steal uncle %d:%d\n", blockIdx.x, idx, current_root);
+						//# begin initializing
+						subH_size = 0, L_neighbor_size = 0, B_size = 0, H_neighbor_size = 0, B_size_H = 0, flag = 0, level = lev_tmp, top = lev_tmp, S_level_size = 0, num_tmp = 0;
+						for (int i = 0; i <= top; i++) {
+							stack[blockIdx.x][i] = 0;
+							subH[blockIdx.x][i][0] = 1;
+						}
+						for (int i = 0; i <= subH[idx][level][0]; i++) {
+							subH[blockIdx.x][level][i] = subH[idx][level][i];
+						}
+						// warning: S[idx][level]的元素可能会发生改变
+						for (int j = 0; j <= S[idx][level][0]; j++) {
+							S[blockIdx.x][level][j] = S[idx][level][j];
+						}
+						//#end initializing
+						threshold = lev_tmp;
+						/*if (current_root == 121) {
+							printf("A\n");
+						}*/
 					}
-					// warning: S[idx][level]的元素可能会发生改变
-					for (int j = 0; j <= S[idx][level][0]; j++) {
-						S[blockIdx.x][level][j] = S[idx][level][j];
+					else {
+						mask = 0;
+						glock = 1;
 					}
-					//#end initializing
 				}
+				//end2 = clock64() / 1582000;
+				//duration2 += end2 - start2;
 				// warning: 要不要把该GCL标记一下，下次不再遍历它
-			}*/
+			}
 		}
 		//__syncthreads();
 		__syncthreads();
@@ -805,6 +897,7 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 			gcl_tmp = GCL[idx];
 		}
 		if (gcl_tmp == 0xFFFFFFFF) {
+			if (threadIdx.x == 0)  last_idx = blockIdx.x;
 			continue;
 		}
 		// process the sibling case singlely
@@ -818,44 +911,58 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				continue;
 			}*/
 			if (threadIdx.x == 0) {
+				//start2 = clock64() / 1582000;
+				last_idx = blockIdx.x;
 				vertex = next_vertex;
 				flag = 1;
 				stack[blockIdx.x][top] = 1;
 				top++;
 				level++;
+				GCL[blockIdx.x] = (mask == 0x40000000 ? next_idx | 0x40000000 : (tid / gridDim.x * (*p) + level) | mask);
 				//GCL[blockIdx.x] = (tid / gridDim.x * (*p) + level) | mask;
 				L_neighbor_size = row_dev_L[vertex + 1] - row_dev_L[vertex];
 				res_num = 0;
 				lock = 1;
 				//start = clock();
 				num_tmp += S[blockIdx.x][level - 1][0];
+				//end2 = clock64() / 1582000;
+				//duration2 += end2 - start2;
+				//start = clock64() / 1582000;
 			}
 			__syncthreads();
 			IntersectionDev(row_dev_L[vertex], col_dev_L, L_neighbor_size, &S[blockIdx.x][level - 1][1], S[blockIdx.x][level - 1][0], &S[blockIdx.x][level][0], res_num, lock);
 			__syncthreads();
 			if (threadIdx.x == 0) {
+				//end = clock64() / 1582000;
+				//duration += end - start;
 				S[blockIdx.x][level][0] = res_num;
 				H_neighbor_size = row_dev_H[vertex + 1] - row_dev_H[vertex];
 				res_num = 0;
 				lock = 1;
 				num_tmp += subH[blockIdx.x][level - 1][0];
+				//start = clock64() / 1582000;
 			}
 			__syncthreads();
 			IntersectionDev(row_dev_H[vertex], col_dev_H, H_neighbor_size, &subH[blockIdx.x][level - 1][1], subH[blockIdx.x][level - 1][0], &subH[blockIdx.x][level][0], res_num, lock);
 			__syncthreads();
 			if (threadIdx.x == 0) {
+				//end = clock64() / 1582000;
+				//duration += end - start;
 				subH[blockIdx.x][level - 1][0] = 1;
 				subH[blockIdx.x][level - 1][1] = vertex;
 				subH[blockIdx.x][level][0] = res_num;
+				stack[blockIdx.x][level - 1] = 1;
 				if (S[blockIdx.x][level][0] < *q || subH[blockIdx.x][level][0] < *p - level - 1) {
 					top--;
 					level--;
+					GCL[blockIdx.x] = (mask == 0x40000000 ? next_idx | 0x40000000 : (tid / gridDim.x * (*p) + level) | mask);
 				}
 			}
 			__syncthreads();
 		
 		}
 		else if (mask == 0) {
+			if (threadIdx.x == 0) last_idx = idx;
 			continue;
 		}
 
@@ -871,9 +978,13 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 			if (level == *p - 1) {
 				if (threadIdx.x == 0) {
 					//*count += OrderMulDev(S[blockIdx.x][level - 1][0], *q);
-					/*if (mask == 0x80000000) printf("%d-Steal\n", current_root);
-					else printf("%d-Steal-root\n", next_idx);*/
+					//if (mask == 0x80000000) printf("%d-Steal %d\n", current_root, blockIdx.x);
+					//else if (mask == 0x40000000) printf("%d-Steal-root %d\n", next_idx, blockIdx.x);
+					//else printf("%d-Steal Level 1 %d\n", idx, blockIdx.x);
+					//start2 = clock64() / 1582000;
 					atomicAdd(count, OrderMulDev(S[blockIdx.x][level][0], *q));
+					//end2 = clock64() / 1582000;
+					//duration2 += end2 - start2;
 					//printf("%d ", *count);
 					stack[blockIdx.x][top] = 0;
 					top--;
@@ -891,19 +1002,23 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 			int size = subH[blockIdx.x][level][0];
 			for (int j = stack[blockIdx.x][top]; j < size; j++) {
 				if (threadIdx.x == 0) {
+					//start2 = clock64() / 1582000;
 					vertex = subH[blockIdx.x][level][j + 1] - 1;
-					/*loop_id = BNN[blockIdx.x][0];
+					loop_id = BNN[blockIdx.x][top];
+					if (j == size - 1) BNN[blockIdx.x][top] = 0;
 				}
-				if (mask == 0x40000000 && top == 0 && loop_id != 0 && j <= loop_id) {
+				if (top < 2 && loop_id != 0 && j <= loop_id - 1) {
 					if (threadIdx.x == 0) {
 						//stack[blockIdx.x][top] = BNN[blockIdx.x][0] + 1;
-						printf("Steal root %d Skip %d-%d\n", blockIdx.x, j, BNN[blockIdx.x][0]);
+						//printf("Steal root %d Skip %d-%d, Level %d\n", blockIdx.x, j, loop_id - 1, top);
+						if(loop_id == size)  BNN[blockIdx.x][top] = 0;
 						//visited_second = 0;
+						stack[blockIdx.x][top] = loop_id;
 					}
-					j = loop_id;
+					j = loop_id - 1;
 					continue;
 				}
-				if(threadIdx.x == 0){*/
+				if(threadIdx.x == 0){
 					flag = 1;
 					stack[blockIdx.x][top] = j + 1;
 					top++;
@@ -914,6 +1029,7 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 					lock = 1;
 					//start = clock();
 					num_tmp += S[blockIdx.x][level - 1][0];
+					//start = clock64() / 1582000;
 				}
 				//__syncthreads();
 				__syncthreads();
@@ -921,6 +1037,8 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				__syncthreads();
 				//checkCudaErrors(cudaGetLastError());
 				if (threadIdx.x == 0) {
+					//end = clock64() / 1582000;
+					//duration += end - start;
 					//end = clock();
 					//duration = ((double)(end - start) / CLOCKS_PER_SEC);
 					//printf("%lf\n", duration);
@@ -932,6 +1050,7 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 					res_num = 0;
 					lock = 1;
 					num_tmp += subH[blockIdx.x][level - 1][0];
+					//start = clock64() / 1582000;
 				}
 				__syncthreads();
 				IntersectionDev(row_dev_H[vertex], col_dev_H, H_neighbor_size, &subH[blockIdx.x][level - 1][1], subH[blockIdx.x][level - 1][0], &subH[blockIdx.x][level][0], res_num, lock);
@@ -939,6 +1058,8 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 
 				//checkCudaErrors(cudaGetLastError());
 				if (threadIdx.x == 0) {
+					//end = clock64() / 1582000;
+					//duration += end - start;
 					//__syncthreads();
 					subH[blockIdx.x][level][0] = res_num;
 					if (S[blockIdx.x][level][0] < *q || subH[blockIdx.x][level][0] < *p - level - 1) {
@@ -951,6 +1072,7 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 				__syncthreads();
 				break;
 			}
+			//if (threadIdx.x == 0) BNN[blockIdx.x][top] = 0;
 			__syncthreads();
 			if (flag == 0) {
 				if (threadIdx.x == 0) {
@@ -964,10 +1086,17 @@ __global__ void findCliqueGPUStre2(unsigned* row_dev_L, unsigned* col_dev_L, uns
 		}
 		if (threadIdx.x == 0) {
 			GCL[blockIdx.x] = 0xFFFFFFFF;
+			//BNR[blockIdx.x] = 0;
 		}
 		//printf("AA\n");
 	}
-	if (threadIdx.x == 0) printf("%d End\n", blockIdx.x);
+	if (threadIdx.x == 0) {
+		//end1 = clock64()/1582000;
+		//GetLocalTime(&end);
+		//cudaEventRecord(stop_cu_dev[blockIdx.x], 0);
+		printf("%d End\n", blockIdx.x);
+	}
+	//cudaEventSynchronize(stop);
 }
 
 
@@ -1580,6 +1709,16 @@ int main() {
 
 			//clock_t startc, finish;
 			//double durationc;
+			/*cudaEvent_t start_cu[BLOCKNUM], stop_cu[BLOCKNUM];
+			cudaEvent_t* start_cu_dev, *stop_cu_dev;
+			for (int it; it < BLOCKNUM; it++) {
+				cudaEventCreate(&start_cu[it]);
+				cudaEventCreate(&stop_cu[it]);
+			}
+			cudaMalloc((void**)&start_cu_dev, sizeof(cudaEvent_t) * BLOCKNUM);
+			cudaMalloc((void**)&stop_cu_dev, sizeof(cudaEvent_t) * BLOCKNUM);
+			cudaMemcpy(start_cu_dev, start_cu, sizeof(cudaEvent_t) * BLOCKNUM, cudaMemcpyHostToDevice);
+			cudaMemcpy(stop_cu_dev, stop_cu, sizeof(cudaEvent_t) * BLOCKNUM, cudaMemcpyHostToDevice);*/
 			auto start = std::chrono::high_resolution_clock::now();
 			//startc = clock();
 			//std::vector<unsigned> ans;
@@ -1600,12 +1739,21 @@ int main() {
 			cudaMemcpy(&count, count_dev, sizeof(int), cudaMemcpyDeviceToHost);
 			checkCudaErrors(cudaGetLastError());
 			//std::cout << max_lev << std::endl;
-
 			auto end = std::chrono::high_resolution_clock::now();
 			//finish = clock();
 			//durationc = ((double)(finish - startc) / CLOCKS_PER_SEC);
 			std::chrono::duration<float> duration = end - start;
 			std::cout << "All time: " << duration.count() << "s" << std::endl;
+			/*cudaMemcpy(start_cu, start_cu_dev, sizeof(cudaEvent_t) * BLOCKNUM, cudaMemcpyDeviceToHost);
+			float tt = 0.0f;
+			for (int it = 0; it < BLOCKNUM; it++) {
+				cudaEventElapsedTime(&tt, start_cu[it], stop_cu[it]);
+				printf("TIme %d:%f s\n", it, tt);
+				cudaEventDestroy(start_cu[it]);
+				cudaEventDestroy(stop_cu[it]);
+			}
+			cudaFree(start_cu_dev);
+			cudaFree(stop_cu_dev);*/
 			//std::cout << durationc << std::endl;
 			cudaFree(non_vertex_dev);
 
@@ -1639,6 +1787,6 @@ int main() {
 }
 
 //int main() {
-//	test(20, 8);
+//	test(16, 8);
 //	return 0;
 //}
